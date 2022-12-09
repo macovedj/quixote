@@ -1,5 +1,129 @@
 const std = @import("std");
+// const WasmAllocator = @import("heap/WasmAllocator.zig");
+
 const mem = std.mem;
+
+const allocator = std.heap.wasm_allocator;
+
+const JSMallocState = struct {
+    malloc_count: usize,
+    malloc_size: usize,
+    malloc_limit: usize,
+    // opaque: *void,
+    //  /* user opaque */
+};
+// static void *js_def_malloc(JSMallocState *s, size_t size)
+// {
+//     void *ptr;
+
+//     /* Do not allocate zero bytes: behavior is platform dependent */
+//     assert(size != 0);
+
+//     if (unlikely(s->malloc_size + size > s->malloc_limit))
+//         return NULL;
+
+//     ptr = malloc(size);
+//     if (!ptr)
+//         return NULL;
+
+//     s->malloc_count++;
+//     s->malloc_size += js_def_malloc_usable_size(ptr) + MALLOC_OVERHEAD;
+//     return ptr;
+// }
+
+fn js_def_malloc(s: *JSMallocState, size: usize) *void {
+  var ptr = allocator.allocate(size);
+  s.malloc_count += 1;
+  s.malloc_size = size;
+  return ptr;
+}
+// struct JSString {
+//     JSRefCountHeader header; /* must come first, 32-bit */
+//     uint32_t len : 31;
+//     uint8_t is_wide_char : 1; /* 0 = 8 bits, 1 = 16 bits characters */
+//     /* for JS_ATOM_TYPE_SYMBOL: hash = 0, atom_type = 3,
+//        for JS_ATOM_TYPE_PRIVATE: hash = 1, atom_type = 3
+//        XXX: could change encoding to have one more bit in hash */
+//     uint32_t hash : 30;
+//     uint8_t atom_type : 2; /* != 0 if atom, JS_ATOM_TYPE_x */
+//     uint32_t hash_next; /* atom_index for JS_ATOM_TYPE_SYMBOL */
+// #ifdef DUMP_LEAKS
+//     struct list_head link; /* string list */
+// #endif
+//     union {
+//         uint8_t str8[0]; /* 8 bit strings will get an extra null terminator */
+//         uint16_t str16[0];
+//     } u;
+// };
+
+const JSString = struct {
+
+};
+
+// static int JS_ReadObjectAtoms(BCReaderState *s)
+// {
+//     uint8_t v8;
+//     JSString *p;
+//     int i;
+//     JSAtom atom;
+
+//     if (bc_get_u8(s, &v8))
+//         return -1;
+//     /* XXX: could support byte swapped input */
+//     if (v8 != BC_VERSION) {
+//         JS_ThrowSyntaxError(s->ctx, "invalid version (%d expected=%d)",
+//                             v8, BC_VERSION);
+//         return -1;
+//     }
+//     if (bc_get_leb128(s, &s->idx_to_atom_count))
+//         return -1;
+
+//     bc_read_trace(s, "%d atom indexes {\n", s->idx_to_atom_count);
+
+//     if (s->idx_to_atom_count != 0) {
+//         s->idx_to_atom = js_mallocz(s->ctx, s->idx_to_atom_count *
+//                                     sizeof(s->idx_to_atom[0]));
+//         if (!s->idx_to_atom)
+//             return s->error_state = -1;
+//     }
+//     for(i = 0; i < s->idx_to_atom_count; i++) {
+//         p = JS_ReadString(s);
+//         if (!p)
+//             return -1;
+//         atom = JS_NewAtomStr(s->ctx, p);
+//         if (atom == JS_ATOM_NULL)
+//             return s->error_state = -1;
+//         s->idx_to_atom[i] = atom;
+//         if (s->is_rom_data && (atom != (i + s->first_atom)))
+//             s->is_rom_data = FALSE; /* atoms must be relocated */
+//     }
+//     bc_read_trace(s, "}\n");
+//     return 0;
+// }
+
+fn JS_ReadObjectAtoms (s: *BCReaderState) c_int {
+  var v8: u8 = 0;
+  // var p = mem.zeroInit(JSString);
+  // var i: c_int = 0;
+  // var atom: JSAtom = 0;
+  if (bc_get_u8(s, &v8)) {
+    return -1;
+  }
+  if (bc_get_leb128(s, s.idx_to_atom_count)) {
+    return -1;
+  }
+
+  // TODO BC_READTRACE once implemented
+  if (s.idx_to_atom_count != 0) {
+        // s.idx_to_atom = js_mallocz(s->ctx, s->idx_to_atom_count *
+        //                             sizeof(s->idx_to_atom[0]));
+        if (!s.idx_to_atom) {
+          s.error_state = -1;
+          return s.error_state;
+
+        }
+  }
+}
 
 // static int bc_read_error_end(BCReaderState *s)
 // {
@@ -28,6 +152,7 @@ fn bc_read_error_end(s: BCReaderState) c_int {
 fn bc_get_u8(s: *BCReaderState, pval: *u8) c_int {
   if (s.buf_end - s.ptr < 1) {
     pval.* = 0;
+    // TODO make closer to quickjs impl
     return bc_read_error_end(s);
   }
   s.ptr += 1;
@@ -35,6 +160,64 @@ fn bc_get_u8(s: *BCReaderState, pval: *u8) c_int {
   return 0;
 }
 
+// static int get_leb128(uint32_t *pval, const uint8_t *buf,
+//                       const uint8_t *buf_end)
+// {
+//     const uint8_t *ptr = buf;
+//     uint32_t v, a, i;
+//     v = 0;
+//     for(i = 0; i < 5; i++) {
+//         if (unlikely(ptr >= buf_end))
+//             break;
+//         a = *ptr++;
+//         v |= (a & 0x7f) << (i * 7);
+//         if (!(a & 0x80)) {
+//             *pval = v;
+//             return ptr - buf;
+//         }
+//     }
+//     *pval = 0;
+//     return -1;
+// }
+fn get_leb128(pval: *u32, buf: *const u8, buf_end: *const u8) c_int {
+  var ptr: *const u8 = buf;
+  var v: u32 = 0;
+  var a: u32 = 0;
+  var i: u32 = 0;
+  while (i < 5) {
+    if (ptr >= buf_end) {
+      break;
+    }
+    ptr.* += 1;
+    a = ptr.*;
+    v |= (a & 0x7f) << (i * 7);
+    if (!(a & 0x80)) {
+        pval.* = v;
+        return ptr - buf;
+    }
+  }
+  pval.* = 0;
+  return -1;
+}
+// static int bc_get_leb128(BCReaderState *s, uint32_t *pval)
+// {
+//     int ret;
+//     ret = get_leb128(pval, s->ptr, s->buf_end);
+//     if (unlikely(ret < 0))
+//         return bc_read_error_end(s);
+//     s->ptr += ret;
+//     return 0;
+// }
+fn bc_get_leb128(s: *BCReaderState, pval: *u32) c_int {
+  var ret: c_int = 0;
+  ret = get_leb128(pval, s.ptr, s.buf_end);
+  if (ret < 0) {
+    // TODO make closer to quickjs impl
+    return bc_read_error_end(s);
+  }
+  s.ptr += ret;
+  return 0;
+}
 //  /* allow function/module */
 const JS_READ_OBJ_BYTECODE = 1 << 0;
 // /* avoid duplicating 'buf' data */
@@ -276,7 +459,10 @@ fn JS_ReadObject(ctx: *JSContext, buf: *u8, buf_len: usize, flags: u8) JSValue {
   s.allow_reference = ((flags & JS_READ_OBJ_REFERENCE) != 0);
   if (s.allow_bytecode) {
     s.first_atom = Atoms.JS_ATOM_END;
+  } else {
+    s.first_atom = 1;
   }
+
   return obj;
 }
 
