@@ -2,6 +2,7 @@ const std = @import("std");
 // const WasmAllocator = @import("heap/WasmAllocator.zig");
 
 const mem = std.mem;
+const assert = std.debug.assert;
 
 const allocator = std.heap.wasm_allocator;
 
@@ -12,6 +13,65 @@ const JSMallocState = struct {
     // opaque: *void,
     //  /* user opaque */
 };
+
+const JS_TAGS = enum {
+  // JS_TAG_FIRST       = -11, /* first negative tag */
+  //   JS_TAG_BIG_DECIMAL = -11,
+  //   JS_TAG_BIG_INT     = -10,
+  //   JS_TAG_BIG_FLOAT   = -9,
+  //   JS_TAG_SYMBOL      = -8,
+  //   JS_TAG_STRING      = -7,
+  //   JS_TAG_MODULE      = -3, /* used internally */
+  //   JS_TAG_FUNCTION_BYTECODE = -2, /* used internally */
+  //   JS_TAG_OBJECT      = -1,
+
+  //   JS_TAG_INT         = 0,
+  //   JS_TAG_BOOL        = 1,
+  //   JS_TAG_NULL        = 2,
+  //   JS_TAG_UNDEFINED   = 3,
+  //   JS_TAG_UNINITIALIZED = 4,
+  //   JS_TAG_CATCH_OFFSET = 5,
+  //   JS_TAG_EXCEPTION   = 6,
+  //   JS_TAG_FLOAT64     = 7,
+};
+
+const JSValueUnion = union {
+  int32: i32,
+  float64: f64,
+  ptr: opaque{},
+};
+
+const JSValue = struct {
+  u: JSValueUnion,
+  tag: i64,
+};
+
+// #define JS_VALUE_GET_TAG(v) (int)((uintptr_t)(v) & 0xf)
+fn JS_VALUE_GET_TAG(v: JSValue) c_int {
+  // almost certainly not right
+  return @ptrToInt(&v & 0xf);
+}
+
+// #define JS_VALUE_GET_OBJ(v) ((JSObject *)JS_VALUE_GET_PTR(v))
+fn JS_VALUE_GET_OBJ(v: JSValue) *JSObject {
+  return @ptrCast(JSValue, JS_VALUE_GET_PTR(v));
+}
+
+// #define JS_VALUE_GET_PTR(v) ((v).u.ptr)
+fn JS_VALUE_GET_PTR(v: JSValue) *JSValueUnion {
+  return v.u.ptr;
+}
+
+// typedef union JSValueUnion {
+//     int32_t int32;
+//     double float64;
+//     void *ptr;
+// } JSValueUnion;
+
+// typedef struct JSValue {
+//     JSValueUnion u;
+//     int64_t tag;
+// } JSValue;
 // static void *js_def_malloc(JSMallocState *s, size_t size)
 // {
 //     void *ptr;
@@ -125,6 +185,27 @@ fn JS_ReadObjectAtoms (s: *BCReaderState) c_int {
   }
 }
 
+const CLASS_ID_TAGS = enum {
+  JS_CLASS_BYTECODE_FUNCTION,
+  JS_CLASS_GENERATOR_FUNCTION,
+  JS_CLASS_ASYNC_FUNCTION,
+  JS_CLASS_ASYNC_GENERATOR_FUNCTION,
+};
+
+// static BOOL js_class_has_bytecode(JSClassID class_id)
+// {
+//     return (class_id == JS_CLASS_BYTECODE_FUNCTION ||
+//             class_id == JS_CLASS_GENERATOR_FUNCTION ||
+//             class_id == JS_CLASS_ASYNC_FUNCTION ||
+//             class_id == JS_CLASS_ASYNC_GENERATOR_FUNCTION);
+// }
+fn js_class_has_bytecode(class_id: u32) bool {
+  return ((class_id == CLASS_ID_TAGS.JS_CLASS_BYTECODE_FUNCTION) ||
+            (class_id == CLASS_ID_TAGS.JS_CLASS_GENERATOR_FUNCTION) ||
+            (class_id == CLASS_ID_TAGS.JS_CLASS_ASYNC_FUNCTION) ||
+            (class_id == CLASS_ID_TAGS.JS_CLASS_ASYNC_GENERATOR_FUNCTION));
+}
+
 // static int bc_read_error_end(BCReaderState *s)
 // {
 //     if (!s->error_state) {
@@ -225,6 +306,14 @@ const JS_READ_OBJ_ROM_DATA = 1 << 1;
 // /* allow SharedArrayBuffer */
 const JS_READ_OBJ_SAB = 1 << 2;
 const JS_READ_OBJ_REFERENCE = 1 << 3;
+
+// /* JS_Eval() flags */
+const JS_EVAL_TYPE_GLOBAL = 0 << 0; //* global code (default) */
+const JS_EVAL_TYPE_MODULE = 1 << 0; //* module code */
+const JS_EVAL_TYPE_DIRECT = 2 << 0; //* direct call (internal use) */
+const JS_EVAL_TYPE_INDIRECT = 3 << 0; //* indirect call (internal use) */
+const JS_EVAL_TYPE_MASK = 3 << 0;
+
 // typedef struct JSParseState {
 //     JSContext *ctx;
 //     int last_line_num;  /* line number of last token */
@@ -291,7 +380,7 @@ const JS_READ_OBJ_REFERENCE = 1 << 3;
 //             js_mode |= JS_MODE_STRICT;
 //         }
 //     }
-//     fd = js_new_function_def(ctx, NULL, TRUE, FALSE, filename, 1);
+    // fd = js_new_function_def(ctx, NULL, TRUE, FALSE, filename, 1);
 //     if (!fd)
 //         goto fail1;
 //     s->cur_func = fd;
@@ -354,12 +443,157 @@ const JS_READ_OBJ_REFERENCE = 1 << 3;
 //     return JS_EXCEPTION;
 // }
 
+// static JSFunctionDef *js_new_function_def(JSContext *ctx,
+//                                           JSFunctionDef *parent,
+//                                           BOOL is_eval,
+//                                           BOOL is_func_expr,
+//                                           const char *filename, int line_num)
+//                                           {
+//     JSFunctionDef *fd;
 
-// const JSParseState = struct {
-//   JSContext *ctx;
-// } 
+//     fd = js_mallocz(ctx, sizeof(*fd));
+//     if (!fd)
+//         return NULL;
 
-const JSContext = struct {};
+//     fd->ctx = ctx;
+//     init_list_head(&fd->child_list);
+
+//     /* insert in parent list */
+//     fd->parent = parent;
+//     fd->parent_cpool_idx = -1;
+//     if (parent) {
+//         list_add_tail(&fd->link, &parent->child_list);
+//         fd->js_mode = parent->js_mode;
+//         fd->parent_scope_level = parent->scope_level;
+//     }
+
+//     fd->is_eval = is_eval;
+//     fd->is_func_expr = is_func_expr;
+//     js_dbuf_init(ctx, &fd->byte_code);
+//     fd->last_opcode_pos = -1;
+//     fd->func_name = JS_ATOM_NULL;
+//     fd->var_object_idx = -1;
+//     fd->arg_var_object_idx = -1;
+//     fd->arguments_var_idx = -1;
+//     fd->arguments_arg_idx = -1;
+//     fd->func_var_idx = -1;
+//     fd->eval_ret_idx = -1;
+//     fd->this_var_idx = -1;
+//     fd->new_target_var_idx = -1;
+//     fd->this_active_func_var_idx = -1;
+//     fd->home_object_var_idx = -1;
+
+//     /* XXX: should distinguish arg, var and var object and body scopes */
+//     fd->scopes = fd->def_scope_array;
+//     fd->scope_size = countof(fd->def_scope_array);
+//     fd->scope_count = 1;
+//     fd->scopes[0].first = -1;
+//     fd->scopes[0].parent = -1;
+//     fd->scope_level = 0;  /* 0: var/arg scope */
+//     fd->scope_first = -1;
+//     fd->body_scope = -1;
+
+//     fd->filename = JS_NewAtom(ctx, filename);
+//     fd->line_num = line_num;
+
+//     js_dbuf_init(ctx, &fd->pc2line);
+//     //fd->pc2line_last_line_num = line_num;
+//     //fd->pc2line_last_pc = 0;
+//     fd->last_opcode_line_num = line_num;
+
+//     return fd;
+// }
+
+// fn js_new_function_def(
+//   ctx: *JSContext,
+//   parent: *JSFunctionDef,
+//   is_eval: bool,
+//   is_func_expr: bool,
+//   filename: *const u8,
+//   line_num: u8
+// ) *JSFunctionDef { 
+
+// }
+// incomplete
+fn __JS_EvalInternal(
+  ctx: *JSContext,
+  // this_obj: JSValueConst,
+  input: *const u8,
+  input_len: usize,
+  filename: *const u8,
+  flags: c_int,
+  // scope_index: c_int
+) JSValue {
+  const s1 = mem.zeroInit(JSParseState);
+  js_parse_init(ctx, &s1, input, input_len, filename);
+  const eval_type = flags & JS_EVAL_TYPE_MASK; 
+  if (eval_type == JS_EVAL_TYPE_DIRECT) {
+    const p = mem.zeroInit(JSObject);
+    const sf = ctx.current_stack_frame;
+    assert(sf != null);
+    assert(JS_VALUE_GET_TAG(sf.cur_func) == JS_TAGS.JS_TAG_OBJECT);
+    p = JS_VALUE_GET_OBJ(sf.cur_func);
+    assert(js_class_has_bytecode(p.class_id));
+    // const b = p.u.func.function_bytecode;
+    // const var_refs = p.u.func.var_refs;
+    // const js_mode = b.js_mode;
+  // } else {
+  //   const js_mode = 0;
+}
+  // const fd = js_new_function_def(ctx, null, true, false, filename, 1);
+  // s.cur_func = fd;
+  // fd.evla_type = eval_type;
+  // fd.has_this_binding = (eval_type !=  JS_EVAL_TYPE_DIRECT);
+  // fd.backtrace_barrier = ((flags & JS_EVAL_FLAG_BACKTRACE_BARRIER) != 0);
+  // if (eval_type == JS_EVAL_TYPE_DIRECT) {
+  //     fd.new_target_allowed = b.new_target_allowed;
+  //     fd.super_call_allowed = b.super_call_allowed;
+  //     fd.super_allowed = b.super_allowed;
+  //     fd.arguments_allowed = b.arguments_allowed;
+  // } else {
+  //     fd.new_target_allowed = FALSE;
+  //     fd.super_call_allowed = FALSE;
+  //     fd.super_allowed = FALSE;
+  //     fd.arguments_allowed = TRUE;
+  // }
+  // fd.js_mode = js_mode;
+  // fd.func_name = JS_DupAtom(ctx, JS_ATOM__eval_);
+  // // if (b) {
+  // //   // TODO handle closure vars
+  // // }
+  // fd.module = m;
+  // s.is_module = (m != null);
+  // s.allow_html_comments = !s.is_module;
+  // js_parse_program(s);
+}
+
+const JSObject = struct {
+
+};
+const JSParseState = struct {
+  ctx: *JSContext,
+};
+
+const JSStackFrame = struct {
+  cur_func: JSValue
+};
+// typedef struct JSStackFrame {
+//     struct JSStackFrame *prev_frame; /* NULL if first stack frame */
+//     JSValue cur_func; /* current function, JS_UNDEFINED if the frame is detached */
+//     JSValue *arg_buf; /* arguments */
+//     JSValue *var_buf; /* variables */
+//     struct list_head var_ref_list; /* list of JSVarRef.link */
+//     const uint8_t *cur_pc; /* only used in bytecode functions : PC of the
+//                         instruction after the call */
+//     int arg_count;
+//     int js_mode; /* 0 or JS_MODE_MATH for C functions */
+//     /* only used in generators. Current stack pointer value. NULL if
+//        the function is running. */ 
+//     JSValue *cur_sp;
+// } JSStackFrame;
+const JSContext = struct {
+  current_stack_frame: JSStackFrame,
+};
 
 const JSAtom = u32;
 
@@ -406,9 +640,21 @@ const BCReaderState = struct {
 //     s->token.val = ' ';
 //     s->token.line_num = 1;
 // }
-// fn js_parse_init(ctx: *JSContext, s *JSParseState) {
-//   for (s[0..(@sizeOf(s))]) |*b| b.* = 0;
-// }
+fn js_parse_init(
+  ctx: *JSContext,
+  s: *JSParseState,
+  input: *u8,
+  input_len: usize,
+  filename: *u8
+) void {
+  s.ctx = ctx;
+  s.filename = filename;
+  s.line_num = 1;
+  s.buf_ptr = input;
+  s.buf_end = s.buf_ptr + input_len;
+  s.token.val = ' ';
+  s.token.line_num = 1;
+}
 
 // JSValue JS_ReadObject(JSContext *ctx, const uint8_t *buf, size_t buf_len,
 //                        int flags)
@@ -444,7 +690,8 @@ const BCReaderState = struct {
 const Atoms = enum {
   JS_ATOM_END
 };
-const JSValue = struct {};
+
+const JSValueConst = struct {};
 
 fn JS_ReadObject(ctx: *JSContext, buf: *u8, buf_len: usize, flags: u8) JSValue {
   const s = mem.zeroInit(BCReaderState);
